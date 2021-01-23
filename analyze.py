@@ -29,11 +29,9 @@ from io import StringIO
 
 import pandas as pd
 from github import Github
-import retrying
 import pytz
 
 import altair as alt
-import matplotlib
 
 
 """
@@ -100,7 +98,7 @@ def main():
 
     MD_REPORT.write(
         textwrap.dedent(
-            f"""
+            """
 
     ## Top referrers and paths
 
@@ -631,7 +629,7 @@ def analyse_view_clones_ts_fragments():
 
     log.info("read views/clones time series fragments (CSV docs)")
 
-    basename_suffix = f"_views_clones_series_fragment.csv"
+    basename_suffix = "_views_clones_series_fragment.csv"
     csvpaths = _glob_csvpaths(basename_suffix)
 
     dfs = []
@@ -661,13 +659,14 @@ def analyse_view_clones_ts_fragments():
         #
         # Note the NaN and the floaty type.
 
-        # All metrics are known to be integers by definition here. The NaN are
-        # expected only at the boundaries of each fragment (first and maybe
-        # last sample). Drop the rows where at least one element is missing,
-        # and make sure numbers are treated as integers from here on (this
-        # actually matters (in a cosmetic way) only for outputting the
-        # aggregate CSV later on -- not for plotting, etc).
+        # All metrics are known to be integers by definition here. NaN values
+        # are expected to be present anywhere in this dataframe, and they
+        # semantically mean "0". Therefore, replace those with zeros. Also see
+        # https://github.com/jgehrcke/github-repo-stats/issues/4
         df = df.fillna(0)
+        # Make sure numbers are treated as integers from here on. This actually
+        # matters in a cosmetic way only for outputting the aggregate CSV later
+        # #       # not for plotting and number crunching).
         df = df.astype(int)
 
         # attach snapshot time as meta data prop to df
@@ -930,7 +929,7 @@ def analyse_view_clones_ts_fragments():
 
     MD_REPORT.write(
         textwrap.dedent(
-            f"""
+            """
 
 
     ## Views
@@ -1001,7 +1000,7 @@ def add_stargazers_section(df, date_axis_lim):
 
     MD_REPORT.write(
         textwrap.dedent(
-            f"""
+            """
 
     ## Stargazers
 
@@ -1055,7 +1054,7 @@ def add_fork_section(df, date_axis_lim):
 
     MD_REPORT.write(
         textwrap.dedent(
-            f"""
+            """
 
     ## Forks
 
