@@ -667,7 +667,7 @@ def analyse_view_clones_ts_fragments():
         # and make sure numbers are treated as integers from here on (this
         # actually matters (in a cosmetic way) only for outputting the
         # aggregate CSV later on -- not for plotting, etc).
-        df = df.dropna()
+        df = df.fillna(0)
         df = df.astype(int)
 
         # attach snapshot time as meta data prop to df
