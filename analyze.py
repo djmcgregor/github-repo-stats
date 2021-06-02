@@ -125,10 +125,10 @@ def gen_date_axis_lim(dfs):
     # timestamp. Return in string representation, example:
     # ['2020-03-18', '2021-01-03']
     # Can be used for setting time axis limits in Altair.
-    return [
+    return (
         pd.to_datetime(min(df.index.values[0] for df in dfs)).strftime("%Y-%m-%d"),
         pd.to_datetime(max(df.index.values[-1] for df in dfs)).strftime("%Y-%m-%d"),
-    ]
+    )
 
 
 def configure_altair():
@@ -155,11 +155,14 @@ def gen_report_footer():
 
 def gen_report_preamble():
     now_text = NOW.strftime("%Y-%m-%d %H:%M UTC")
+    attr_link = (
+        "[jgehrcke/github-repo-stats](https://github.com/jgehrcke/github-repo-stats)"
+    )
     MD_REPORT.write(
         textwrap.dedent(
             f"""
     % Statistics for {ARGS.repospec}
-    % Generated with [jgehrcke/github-repo-stats](https://github.com/jgehrcke/github-repo-stats) at {now_text}.
+    % Generated for [{ARGS.repospec}](https://github.com/{ARGS.repospec}) with {attr_link} at {now_text}.
 
     """
         ).strip()
@@ -242,7 +245,7 @@ def gen_pandoc_html_template(target):
                     min-width: 200px;
                     max-width: 980px;
                     margin: 0 auto;
-                    padding: 45px;
+                    padding: 5px;
                 }
 
                 div.full-width-chart {
@@ -464,6 +467,7 @@ def analyse_top_x_snapshots(entity_type):
 
     if len(dfa) == 0:
         log.info("leave early: no data for entity of type %s", entity_type)
+        return
 
     # Build a dict: key is path/referrer name, and value is DF with
     # corresponding raw time series.
@@ -581,7 +585,7 @@ def analyse_top_x_snapshots(entity_type):
                 sort=alt.SortField("order"),
             ),
         )
-        .configure_point(size=100)
+        .configure_point(size=50)
         .properties(**panel_props)
     )
 
@@ -645,6 +649,13 @@ def analyse_view_clones_ts_fragments():
             date_parser=lambda col: pd.to_datetime(col, utc=True),
         )
 
+        # Skip logic for empty data frames. The CSV files written should never
+        # be empty, but if such a bad file made it into the file system then
+        # skipping here facilitates debugging and enhanced robustness.
+        if len(df) == 0:
+            log.warning("empty dataframe parsed from %s, skip", p)
+            continue
+
         # A time series fragment might look like this:
         #
         # df_views_clones:
@@ -703,6 +714,10 @@ def analyse_view_clones_ts_fragments():
 
     log.info("total sample count: %s", sum(len(df) for df in dfs))
 
+    if len(dfs) == 0:
+        log.info("leave early: no data for views/clones")
+        return
+
     newest_snapshot_time = max(df.attrs["snapshot_time"] for df in dfs)
 
     df_prev_agg = None
@@ -741,6 +756,7 @@ def analyse_view_clones_ts_fragments():
             log.error(
                 "set(df_prev_agg.columns) != set (dfall.columns): %s, %s",
                 df_prev_agg.columns,
+                dfall.columns,
             )
             sys.exit(1)
         log.info("pd.concat(dfall, df_prev_agg)")
@@ -973,7 +989,9 @@ def add_stargazers_section(df, date_axis_lim):
         "title": "date",
         "timeUnit": "yearmonthdate",
     }
+
     if date_axis_lim is not None:
+        log.info("custom time window for stargazer plot: %s", date_axis_lim)
         x_kwargs["scale"] = alt.Scale(domain=date_axis_lim)
 
     panel_props = {"height": 300, "width": "container", "padding": 10}
@@ -1019,7 +1037,7 @@ def add_stargazers_section(df, date_axis_lim):
 
 
 def add_fork_section(df, date_axis_lim):
-    # date_axis_lim is expected to be of the form ["2019-01-01", "2019-12-31"]):
+    # date_axis_lim is expected to be of the form ["2019-01-01", "2019-12-31"])
 
     x_kwargs = {
         "field": "time",
@@ -1027,8 +1045,10 @@ def add_fork_section(df, date_axis_lim):
         "title": "date",
         "timeUnit": "yearmonthdate",
     }
+
     if date_axis_lim:
-        x_kwargs["scale"]: alt.Scale(domain=date_axis_lim)
+        log.info("custom time window for fork plot: %s", date_axis_lim)
+        x_kwargs["scale"] = alt.Scale(domain=date_axis_lim)
 
     panel_props = {"height": 300, "width": "container", "padding": 10}
     chart = (
@@ -1137,7 +1157,22 @@ def get_stars_over_time():
 
     df["stars_cumulative"] = df["star_events"].cumsum()
 
-    # Many data points? Downsample.
+    log.info("stars_cumulative, raw data: %s", df["stars_cumulative"])
+
+    # As noted above, this should actually be part of the fetcher.
+    if ARGS.stargazer_ts_resampled_outpath:
+        # The CSV file should contain integers after all (no ".0"), therefore
+        # cast to int. There are no NaNs to be expected, i.e. this should work
+        # reliably.
+        df_for_csv_file = resample_to_1d_resolution(df, "stars_cumulative").astype(int)
+        log.info("stars_cumulative, for CSV file (resampled): %s", df_for_csv_file)
+        log.info("write aggregate to %s", ARGS.views_clones_aggregate_outpath)
+        # Pragmatic strategy against partial write / encoding problems.
+        tpath = ARGS.stargazer_ts_resampled_outpath + ".tmp"
+        df_for_csv_file.to_csv(tpath, index_label="time_iso8601")
+        os.rename(tpath, ARGS.stargazer_ts_resampled_outpath)
+
+    # Many data points? Downsample, for plotting.
     if len(df) > 50:
         df = downsample_series_to_N_points(df, "stars_cumulative")
 
@@ -1170,7 +1205,7 @@ def get_forks_over_time():
     log.info("current fork count: %s", len(forks))
 
     # The GitHub API returns ISO 8601 timestamp strings encoding the timezone
-    # via the Z suffix, i.e. Zulu time, i.e. UTC. pygithub doesn't parze that
+    # via the Z suffix, i.e. Zulu time, i.e. UTC. pygithub doesn't parse that
     # timezone. That is, whereas the API returns `starred_at` in UTC, the
     # datetime obj created by pygithub is a naive one. Correct for that.
     forktimes_aware = [pytz.timezone("UTC").localize(f.created_at) for f in forks]
@@ -1186,8 +1221,20 @@ def get_forks_over_time():
         index=dtidx,
     )
     df.index.name = "time"
-
     df["forks_cumulative"] = df["fork_events"].cumsum()
+
+    # As noted above, this should actually be part of the fetcher.
+    if ARGS.fork_ts_resampled_outpath:
+        # The CSV file should contain integers after all (no ".0"), therefore
+        # cast to int. There are no NaNs to be expected, i.e. this should work
+        # reliably.
+        df_for_csv_file = resample_to_1d_resolution(df, "forks_cumulative").astype(int)
+        log.info("forks_cumulative, for CSV file (resampled): %s", df_for_csv_file)
+        log.info("write aggregate to %s", ARGS.fork_ts_resampled_outpath)
+        # Pragmatic strategy against partial write / encoding problems.
+        tpath = ARGS.fork_ts_resampled_outpath + ".tmp"
+        df_for_csv_file.to_csv(tpath, index_label="time_iso8601")
+        os.rename(tpath, ARGS.fork_ts_resampled_outpath)
 
     # Many data points? Downsample.
     if len(df) > 80:
@@ -1237,6 +1284,44 @@ def downsample_series_to_N_points(df, column):
     return s.to_frame()
 
 
+def resample_to_1d_resolution(df, column):
+    """
+    Have at most one data point per day. For days w/o change, have no data
+    point.
+
+    Before:
+
+    2020-03-18 16:42:31+00:00      1
+    2020-03-19 20:17:10+00:00      2
+    2020-03-20 05:31:25+00:00      3
+    2020-03-20 09:01:38+00:00      4
+    2020-03-20 14:03:45+00:00      5
+    ...
+
+    After:
+
+    2020-03-18 00:00:00+00:00 1.0
+    2020-03-19 00:00:00+00:00 2.0
+    2020-03-20 00:00:00+00:00 7.0
+    2020-03-21 00:00:00+00:00 9.0
+    """
+    s = df[column]
+    log.info("len(series): %s", len(s))
+    log.info("resample series into 1d bins")
+
+    # Take max() for each group (assume this is a cumsum series). Do `dropna()`
+    # on the resampler to remove all up-sampled data points (so that each data
+    # point still reflects an actual event or a group of events, but when there
+    # was no event within a bin then that bin does not appear with a data point
+    # in the resulting plot).
+    s = s.resample("1d").max().dropna()
+    log.info("len(series): %s", len(s))
+
+    # Turn Series object into Dataframe object again. The values column
+    # retains the original column name
+    return s.to_frame()
+
+
 def parse_args():
     global OUTDIR
     global ARGS
@@ -1259,6 +1344,20 @@ def parse_args():
     parser.add_argument("--resources-directory", default="resources")
     parser.add_argument("--output-directory", default=TODAY + "_report")
     parser.add_argument("--outfile-prefix", default=TODAY + "_")
+
+    parser.add_argument(
+        "--stargazer-ts-resampled-outpath",
+        default="",
+        metavar="PATH",
+        help="Write resampled stargazer time series to CSV file",
+    )
+
+    parser.add_argument(
+        "--fork-ts-resampled-outpath",
+        default="",
+        metavar="PATH",
+        help="Write resampled fork time series to CSV file",
+    )
 
     parser.add_argument(
         "--views-clones-aggregate-outpath",

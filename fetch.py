@@ -76,19 +76,33 @@ def main():
     log.info("current working directory: %s", os.getcwd())
     log.info("write output CSV files to directory: %s", outdir_path)
 
-    df_views_clones.to_csv(
-        os.path.join(
-            outdir_path, f"{INVOCATION_TIME_STRING}_views_clones_series_fragment.csv"
+    if len(df_views_clones):
+        df_views_clones.to_csv(
+            os.path.join(
+                outdir_path,
+                f"{INVOCATION_TIME_STRING}_views_clones_series_fragment.csv",
+            )
         )
-    )
-    df_referrers_snapshot_now.to_csv(
-        os.path.join(
-            outdir_path, f"{INVOCATION_TIME_STRING}_top_referrers_snapshot.csv"
+    else:
+        log.info("do not write df_views_clones: empty")
+
+    if len(df_referrers_snapshot_now):
+        df_referrers_snapshot_now.to_csv(
+            os.path.join(
+                outdir_path, f"{INVOCATION_TIME_STRING}_top_referrers_snapshot.csv"
+            )
         )
-    )
-    df_paths_snapshot_now.to_csv(
-        os.path.join(outdir_path, f"{INVOCATION_TIME_STRING}_top_paths_snapshot.csv")
-    )
+    else:
+        log.info("do not write df_referrers_snapshot_now: empty")
+
+    if len(df_paths_snapshot_now):
+        df_paths_snapshot_now.to_csv(
+            os.path.join(
+                outdir_path, f"{INVOCATION_TIME_STRING}_top_paths_snapshot.csv"
+            )
+        )
+    else:
+        log.info("do not write df_paths_snapshot_now: empty")
 
     log.info("done!")
 
@@ -234,26 +248,27 @@ def clones_or_views_to_df(items, metric):
     series_count_total = []
     series_count_unique = []
     series_timestamps = []
+
     for sample in items:
-        # GitHub API docs say
-        # "Timestamps are aligned to UTC"
-        # `sample.timestamp` is a naive datetime object. Make it tz-aware.
-        ts_aware = pytz.timezone("UTC").localize(sample.timestamp)
-        series_timestamps.append(ts_aware)
+        # GitHub API docs say "Timestamps are aligned to UTC".
+        # `sample.timestamp` is a tz-naive datetime object.
+        series_timestamps.append(sample.timestamp)
         series_count_total.append(int(sample.count))
         series_count_unique.append(int(sample.uniques))
 
+    # Attach timezone information to `pd.DatetimeIndex` (make this index
+    # tz-aware, leave actual numbers intact).
     df = pd.DataFrame(
         data={
             f"{metric}_total": series_count_total,
             f"{metric}_unique": series_count_unique,
         },
-        index=series_timestamps,
+        index=pd.DatetimeIndex(data=series_timestamps, tz="UTC"),
     )
     df.index.name = "time_iso8601"
 
-    # log.info("built dataframe for %s:\n%s", metric, df)
-    # log.info("dataframe datetimeindex detail: %s", df.index)
+    log.info("built dataframe for %s:\n%s", metric, df)
+    log.info("dataframe datetimeindex detail: %s", df.index)
     return df
 
 
